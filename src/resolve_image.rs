@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use regex::Regex;
 
 use serenity::client::Context;
@@ -136,7 +138,7 @@ impl ImageResolver {
             format!("https://cdn.discordapp.com/emojis/{}.{}?v=1", id, if animated { "gif" } else { "png" })
         }
         else {
-            format!("https://emojicdn.elk.sh/{}?style=twitter", )
+            format!("https://emojicdn.elk.sh/{}?style=twitter", emoji)
         }
     }
 
@@ -183,8 +185,10 @@ impl ImageResolver {
     async fn _sanitize(&self, result: RawResult<'_>, allowed_content_types: &Vec<&str>, allowed_suffixes: &Vec<&str>) -> Result<Vec<u8>, CommandError> {
         match result {
             RawResult::Attachment(attachment) => {
-                if allowed_suffixes.into_iter().any(|suff| !attachment.filename.ends_with(suff)) {
-                    let suffix = attachment.filename.split(".").last().unwrap_or("unknown");
+                let filename = attachment.filename.to_lowercase();
+
+                if !allowed_suffixes.into_iter().any(|suff| filename.ends_with(suff)) {
+                    let suffix = filename.split(".").last().unwrap_or("unknown");
                     Err(CommandError::from(format!("File extension `{}` is not allowed", suffix)))
                 }
                 
@@ -322,29 +326,54 @@ impl ImageResolver {
 
             if self.allow_user_avatars && self.fallback_to_user_avatar {
                 if let Some(avatar) = &message.author.avatar {
-                    return self._sanitize(RawResult::Url(format!(
+                    self._sanitize(RawResult::Url(format!(
                         "https://cdn.discordapp.com/avatars/{}/{}.{}?size=512",
                         message.author.id,
                         avatar,
                         if self.allow_gifs && avatar.starts_with("a_") { "gif" } else { "png" }
                     )), &allowed_content_types, &allowed_suffixes).await
                 }
+                else {
+                    self._sanitize(RawResult::Url(
+                        format!("https://cdn.discordapp.com/embed/avatars/{}.png", message.author.discriminator % 5)
+                    ), &allowed_content_types, &allowed_suffixes).await
+                }
+            } else {
+                Err(CommandError::from("Could not retrieve an image from the message."))
             }
-
-            Err(CommandError::from("Could not retrieve an image from the message."))
         };
         
         if let Some(q) = resolved_query {
             match q {
                 Query::String(query) => {
-                    
-                }
+                    if query.chars().count() < 8 {
+                        self._sanitize(RawResult::Url(Self::_url_from_emoji(query)), &allowed_content_types, &allowed_suffixes).await
+                    }
+                    else {
+                        self._sanitize(RawResult::Url(query), &allowed_content_types, &allowed_suffixes).await
+                    }
+                },
+                Query::Emoji(query) => {
+                    self._sanitize(RawResult::Url(query.url()), &allowed_content_types, &allowed_suffixes).await
+                },
+                Query::Member(query) if self.allow_user_avatars => {
+                    if let Some(avatar) = &query.avatar.or(query.user.avatar) {
+                        self._sanitize(RawResult::Url(format!(
+                            "https://cdn.discordapp.com/avatars/{}/{}.{}?size=512",
+                            query.user.id,
+                            avatar,
+                            if self.allow_gifs && avatar.starts_with("a_") { "gif" } else { "png" }
+                        )), &allowed_content_types, &allowed_suffixes).await
+                    }
+                    else {
+                        fallback().await
+                    }
+                },
+                _ => return fallback().await
             }
         }
         else {
-            return fallback().await;
+            fallback().await
         }
-
-        fallback().await
     }
 }
